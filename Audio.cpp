@@ -1,45 +1,15 @@
 #include "Audio.h"
 
-static const int i2sBufferSize = 4096; // Reducir de 12000 a 4096 si es necesario
-
 Audio::Audio(MicType micType) {
-    // Asegurar que wavData es NULL antes de asignar memoria
-    wavData = nullptr;
-
-    // Intentar asignar memoria y verificar si fue exitoso
     wavData = new char*[wavDataSize / dividedWavDataSize];
-    if (!wavData) {
-        Serial.println("Error: No se pudo asignar memoria para wavData.");
-        return;
-    }
-
-    for (int i = 0; i < wavDataSize / dividedWavDataSize; ++i) {
-        wavData[i] = new char[dividedWavDataSize];
-        if (!wavData[i]) {
-            Serial.println("Error: No se pudo asignar memoria para wavData[i].");
-            return;
-        }
-    }
-
+    for (int i = 0; i < wavDataSize / dividedWavDataSize; ++i) wavData[i] = new char[dividedWavDataSize];
     i2s = new I2S(micType);
-    if (!i2s) {
-        Serial.println("Error: No se pudo inicializar I2S.");
-        return;
-    }
 }
 
 Audio::~Audio() {
-    if (wavData) {
-        for (int i = 0; i < wavDataSize / dividedWavDataSize; ++i) {
-            if (wavData[i]) {
-                delete[] wavData[i];
-            }
-        }
-        delete[] wavData;
-    }
-    if (i2s) {
-        delete i2s;
-    }
+    for (int i = 0; i < wavDataSize / dividedWavDataSize; ++i) delete[] wavData[i];
+    delete[] wavData;
+    delete i2s;
 }
 
 void Audio::CreateWavHeader(byte* header, int waveDataSize) {
@@ -60,25 +30,25 @@ void Audio::CreateWavHeader(byte* header, int waveDataSize) {
     header[13] = 'm';
     header[14] = 't';
     header[15] = ' ';
-    header[16] = 0x10;
+    header[16] = 0x10;  // linear PCM
     header[17] = 0x00;
     header[18] = 0x00;
     header[19] = 0x00;
-    header[20] = 0x01;
+    header[20] = 0x01;  // linear PCM
     header[21] = 0x00;
-    header[22] = 0x01;
+    header[22] = 0x01;  // monoral
     header[23] = 0x00;
-    header[24] = 0x80;
+    header[24] = 0x80;  // sampling rate 16000
     header[25] = 0x3E;
     header[26] = 0x00;
     header[27] = 0x00;
-    header[28] = 0x00;
+    header[28] = 0x00;  // Byte/sec = 16000x2x1 = 32000
     header[29] = 0x7D;
     header[30] = 0x00;
     header[31] = 0x00;
-    header[32] = 0x02;
+    header[32] = 0x02;  // 16bit monoral
     header[33] = 0x00;
-    header[34] = 0x10;
+    header[34] = 0x10;  // 16bit
     header[35] = 0x00;
     header[36] = 'd';
     header[37] = 'a';
@@ -91,36 +61,29 @@ void Audio::CreateWavHeader(byte* header, int waveDataSize) {
 }
 
 void Audio::Record() {
-    if (!wavData) {
-        Serial.println("Error: wavData no ha sido inicializado.");
-        return;
-    }
-
     CreateWavHeader(paddedHeader, wavDataSize);
-    Serial.println("Grabando audio...");
-
     int bitBitPerSample = i2s->GetBitPerSample();
-    for (int j = 0; j < wavDataSize / dividedWavDataSize; ++j) {
-        int bytesRead = i2s->Read(i2sBuffer, i2sBufferSize);
-        if (bytesRead <= 0) {
-            Serial.println("Error: No se pudo leer datos del micrófono.");
-            continue;
-        }
-
-        for (int i = 0; i < i2sBufferSize / 4; ++i) {  
-            int32_t sample32 = (i2sBuffer[4 * i] << 24) | (i2sBuffer[4 * i + 1] << 16) |
-                               (i2sBuffer[4 * i + 2] << 8) | i2sBuffer[4 * i + 3];
-            int16_t sample16 = sample32 >> 16;  
-            wavData[j][2 * i] = sample16 & 0xFF;
-            wavData[j][2 * i + 1] = (sample16 >> 8) & 0xFF;
+    if (bitBitPerSample == 16) {
+        for (int j = 0; j < wavDataSize / dividedWavDataSize; ++j) {
+            i2s->Read(i2sBuffer, i2sBufferSize / 2);
+            for (int i = 0; i < i2sBufferSize / 8; ++i) {
+                wavData[j][2 * i] = i2sBuffer[4 * i + 2];
+                wavData[j][2 * i + 1] = i2sBuffer[4 * i + 3];
+            }
         }
     }
+    else if (bitBitPerSample == 32) {
+        for (int j = 0; j < wavDataSize / dividedWavDataSize; ++j) {
+            i2s->Read(i2sBuffer, i2sBufferSize);
+            for (int i = 0; i < i2sBufferSize / 8; ++i) {
+                // Ajustar los datos de 32 bits a 24 bits (eliminar los 8 bits superiores)
+                int32_t sample = ((int32_t*)i2sBuffer)[i];
+                sample = sample >> 8;  // Desplazar 8 bits a la derecha para obtener un valor de 24 bits
 
-    // 🔹 Imprimir los primeros valores de audio para depuración
-    Serial.println("Primeros valores de audio capturados:");
-    for (int i = 0; i < 20; i++) {
-        Serial.print(wavData[0][i], HEX);
-        Serial.print(" ");
+                // Almacenar los datos en wavData
+                wavData[j][2 * i] = (sample >> 8) & 0xFF;  // Byte alto
+                wavData[j][2 * i + 1] = sample & 0xFF;     // Byte bajo
+            }
+        }
     }
-    Serial.println();
 }

@@ -10,7 +10,8 @@ enum MicType {
   ADMP441,
   ICS43434,
   M5GO,
-  M5STACKFIRE
+  M5STACKFIRE,
+  INMP441
 };
 
 class I2S {
